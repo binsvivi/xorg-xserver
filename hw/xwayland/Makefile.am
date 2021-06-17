@@ -3,6 +3,8 @@ bin_PROGRAMS = Xwayland
 Xwayland_CFLAGS =				\
 	-I$(top_srcdir)/glamor			\
 	-I$(top_srcdir)/dri3			\
+	-I/opt/libhybris/include/               \
+	-I/usr/include/android-29/		\
 	-DHAVE_DIX_CONFIG_H			\
 	$(XWAYLANDMODULES_CFLAGS)		\
 	$(DIX_CFLAGS)				\
@@ -23,19 +25,20 @@ Xwayland_SOURCES =				\
 
 Xwayland_LDADD =				\
 	$(glamor_lib)				\
+	$(drihybris_lib)				\
 	$(XWAYLAND_LIBS)			\
 	$(top_builddir)/glx/libglxvnd.la	\
 	$(XWAYLAND_SYS_LIBS)			\
 	$(top_builddir)/Xext/libXvidmode.la	\
 	$(XSERVER_SYS_LIBS)
-Xwayland_LDFLAGS = $(LD_EXPORT_SYMBOLS_FLAG)
+Xwayland_LDFLAGS = $(LD_EXPORT_SYMBOLS_FLAG)    \
+		   -shared -export-dynamic
 
 Xwayland_built_sources =
 
 if GLAMOR_EGL
 Xwayland_SOURCES += 				\
 	xwayland-glamor.c			\
-	xwayland-glamor-gbm.c			\
 	xwayland-present.c
 if XV
 Xwayland_SOURCES += 				\
@@ -46,17 +49,26 @@ if XWAYLAND_EGLSTREAM
 Xwayland_SOURCES +=				\
 	xwayland-glamor-eglstream.c
 endif
+Xwayland_SOURCES +=				\
+	xwayland-glamor-hybris.c
 
 glamor_built_sources =				\
 	drm-client-protocol.h			\
 	drm-protocol.c
 
+hybris_built_sources = wayland-android-protocol.c \
+                wayland-android-client-protocol.h
+
 Xwayland_built_sources += $(glamor_built_sources)
+Xwayland_built_sources += $(hybris_built_sources)
 
+drihybris_lib = /usr/local/lib/xorg/modules/libdrihybris.la
 glamor_lib = $(top_builddir)/glamor/libglamor.la
-
-Xwayland_LDADD += $(GLAMOR_LIBS) $(GBM_LIBS) -lEGL -lGL
-Xwayland_DEPENDENCIES = $(glamor_lib) $(XWAYLAND_LIBS)
+#glamor_lib = /usr/lib/xorg/modules/libglamoreglhybris.la
+hybris_lib = /opt/libhybris/lib/aarch64-linux-gnu/
+Xwayland_LDADD += $(GLAMOR_LIBS) $(GBM_LIBS) -L$(hybris_lib) -lgralloc -lhybris-eglplatformcommon -L$(hybris_lib)libhybris-egl/ -lEGL -lGL
+#Xwayland_LDADD += $(GLAMOR_LIBS) $(GBM_LIBS) -L/usr/lib/xorg/modules/ -lglamoreglhybris -L$(hybris_lib) -lgralloc -L$(hybris_lib)libhybris-egl/ -lEGL -lGL
+Xwayland_DEPENDENCIES = $(drihybris_lib) $(glamor_lib) $(XWAYLAND_LIBS)
 endif
 
 Xwayland_built_sources +=					\

@@ -864,13 +864,15 @@ _glamor_fds_from_pixmap(ScreenPtr screen, PixmapPtr pixmap, int *fds,
             return 0;
 
         if (modifier) {
-            return glamor_egl_fds_from_pixmap(screen, pixmap, fds,
-                                              strides, offsets,
-                                              modifier);
+          //  return glamor_egl_fds_from_pixmap(screen, pixmap, fds,
+          //                                    strides, offsets,
+          //                                    modifier);
+	  // shabin: glamor_egl.c not compiled                                   
+	  return 0;
         } else {
             CARD16 stride;
-
-            fds[0] = glamor_egl_fd_from_pixmap(screen, pixmap, &stride, size);
+	    //shabin: glamor_egl.c not compiled
+           // fds[0] = glamor_egl_fd_from_pixmap(screen, pixmap, &stride, size);
             strides[0] = stride;
 
             return fds[0] >= 0;

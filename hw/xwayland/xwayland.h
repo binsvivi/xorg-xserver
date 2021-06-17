@@ -166,6 +166,7 @@ struct xwl_screen {
 
     struct xwl_egl_backend gbm_backend;
     struct xwl_egl_backend eglstream_backend;
+    struct xwl_egl_backend glamor_hybris_backend;
     /* pointer to the current backend for creating pixmaps on wayland */
     struct xwl_egl_backend *egl_backend;
 
@@ -489,5 +490,13 @@ static inline void xwl_glamor_init_eglstream(struct xwl_screen *xwl_screen)
 {
 }
 #endif
+
+//#ifdef 1
+void xwl_glamor_init_hybris(struct xwl_screen *xwl_screen);
+//#else
+//static inline void xwl_glamor_init_hybris(struct xwl_screen *xwl_screen)
+//{
+//}
+//#endif
 
 #endif
