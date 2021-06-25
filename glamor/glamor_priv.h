@@ -345,6 +345,7 @@ typedef struct glamor_pixmap_private {
     EGLImageKHR image;
     Bool used_modifiers;
 #endif
+    EGLClientBuffer buf;
     /** block width of this large pixmap. */
     int block_w;
     /** block height of this large pixmap. */

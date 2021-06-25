@@ -58,9 +58,10 @@
 #endif
 
 #define GLAMOR_GLES2
-
+#define EGL_WAYLAND_BUFFER_WL           0x31D5 /* eglCreateImageKHR target */
 struct xwl_pixmap {
     struct wl_buffer *buffer;
+    EGLClientBuffer buf;
     EGLImage image;
     unsigned int texture;
     struct gbm_bo *bo;
@@ -86,7 +87,8 @@ struct glamor_egl_screen_private {
     PFNEGLHYBRISCREATEREMOTEBUFFERPROC eglHybrisCreateRemoteBuffer;
     PFNEGLHYBRISGETNATIVEBUFFERINFOPROC eglHybrisGetNativeBufferInfo;
     PFNEGLHYBRISSERIALIZENATIVEBUFFERPROC eglHybrisSerializeNativeBuffer;
-
+    PFNEGLHYBRISCREATEWAYLANDBUFFERFROMIMAGEWLPROC eglCreateWaylandBufferFromImageWL;
+    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
 
     CloseScreenProcPtr saved_close_screen;
     DestroyPixmapProcPtr saved_destroy_pixmap;
@@ -149,7 +151,7 @@ is_device_path_render_node (const char *device_path)
 }
 
 static PixmapPtr
-xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  struct wl_buffer *wlb, buffer_handle_t handle, int width, int height,
+xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  EGLClientBuffer buf, int width, int height,
                                     int depth)
 {
     PixmapPtr pixmap;
@@ -171,8 +173,36 @@ xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  struct wl_b
     if (xwl_pixmap == NULL) 
         return NULL; 
 
-    xwl_pixmap->buffer = wlb;
-    xwl_pixmap->handle = handle;
+    xwl_glamor_egl_make_current(xwl_screen);
+
+    xwl_pixmap->buf = buf;
+    xwl_pixmap->buffer = NULL;
+    //xwl_pixmap->buffer = wlb;
+    //xwl_pixmap->handle = handle;
+    xwl_pixmap->image = glamor_egl->eglCreateImageKHR(xwl_screen->egl_display,
+                                          EGL_NO_CONTEXT,
+                                          EGL_NATIVE_BUFFER_HYBRIS,
+                                          xwl_pixmap->buf, NULL);
+    if (xwl_pixmap->image == EGL_NO_IMAGE_KHR)
+      goto error;
+
+    glGenTextures(1, &xwl_pixmap->texture);
+    glBindTexture(GL_TEXTURE_2D, xwl_pixmap->texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, xwl_pixmap->image);
+    if (eglGetError() != EGL_SUCCESS)
+      goto error;
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glamor_set_pixmap_texture(pixmap, xwl_pixmap->texture);
+    if (!glamor_get_pixmap_texture(pixmap))
+      goto error;
+
+    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
+
     //glamor_set_pixmap_type(pixmap, GLAMOR_DRM_ONLY);
     xwl_pixmap_set_private(pixmap, xwl_pixmap);
     //struct glamor_pixmap_private *pixmap_priv =
@@ -225,6 +255,15 @@ xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  struct wl_b
 done:
     return pixmap;
 
+error:
+    if (xwl_pixmap->image != EGL_NO_IMAGE_KHR)
+      eglDestroyImageKHR(xwl_screen->egl_display, xwl_pixmap->image);
+    if (pixmap)
+      glamor_destroy_pixmap(pixmap);
+    free(xwl_pixmap);
+
+    return NULL;
+
 }
 
 static void
@@ -258,45 +297,65 @@ xwl_glamor_hybris_create_pixmap(ScreenPtr screen,
 	//int m_usage = GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
 	int m_usage = GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_RENDER;
 	//int m_usage = 0xb00;
-	uint16_t stride = 0;
+	uint32_t stride = 0;
 	buffer_handle_t handle;
        // wnb = new ClientWaylandBuffer(width, height, m_format, m_usage);
-	
+
+       EGLClientBuffer buf;
+       glamor_egl->eglHybrisCreateNativeBuffer(width, height,
+                                      m_usage,
+                                      HYBRIS_PIXEL_FORMAT_RGBA_8888,
+                                      &stride, &buf);
+#if 0
 	struct wl_array ints;
 	int *ints_data;
 	struct android_wlegl_handle *wlegl_handle;
 
         int alloc_ok = hybris_gralloc_allocate(width ? width : 1, height ? height : 1, m_format, m_usage, &handle, &stride);
 
+    ErrorF("xwl_glamor_hybris_create_pixmap before wl_array_add width: %d, height: %d, numInts: %d\n",width, height,  handle->numInts);
+
 	wl_array_init(&ints);
 	ints_data = (int*) wl_array_add(&ints, handle->numInts*sizeof(int));
+    ErrorF("xwl_glamor_hybris_create_pixmap after wl_array_add width:%d, height:%d,  numInts : %d\n", width, height,  handle->numInts);
 	memcpy(ints_data, handle->data + handle->numFds, handle->numInts*sizeof(int));
+    ErrorF("xwl_glamor_hybris_create_pixmap after 1: numFds: %d \n", handle->numFds);
 
 	wlegl_handle = android_wlegl_create_handle((struct android_wlegl_handle *)glamor_egl->android_wlegl, handle->numFds, &ints);
 
+    ErrorF("xwl_glamor_hybris_create_pixmap after 2\n");
 	wl_array_release(&ints);
 
+    ErrorF("xwl_glamor_hybris_create_pixmap after 3  numFds: %d\n", handle->numFds);
 	for (int i = 0; i < handle->numFds; i++) {
     		ErrorF("xwl_glamor_hybris_create_pixmap before addFd i: %d\n", i);
 		android_wlegl_handle_add_fd(wlegl_handle, handle->data[i]);
 	}
 
+    ErrorF("xwl_glamor_hybris_create_pixmap after 4\n");
 	struct wl_buffer * wlbuffer = android_wlegl_create_buffer((struct android_wlegl_handle *)glamor_egl->android_wlegl, width, height, stride, m_format, m_usage, wlegl_handle);
+    ErrorF("xwl_glamor_hybris_create_pixmap after 5\n");
 
         android_wlegl_handle_destroy(wlegl_handle);
 	
 
+    ErrorF("xwl_glamor_hybris_create_pixmap after 6\n");
 	//WaylandDisplay *wdpy = (WaylandDisplay *)xwl_screen->egl_display;
 	//glamor_egl->wl_queue = wl_display_create_queue(wdpy->wl_dpy);
 	//wnb->init(glamor_egl->android_wlegl, wdpy->wl_dpy, glamor_egl->wl_queue);
 	wl_buffer_add_listener(wlbuffer, &wl_buffer_listener, NULL);
 	//wl_proxy_set_queue((struct wl_proxy *) wnb->wlbuffer, glamor_egl->wl_queue);
-	if (handle) {
-	    pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, wlbuffer , handle,width, height, depth);
+#endif
+	//if (handle) {
+	    pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth);
 	    if (!pixmap) {
 	    
 	    }
-	}
+	    else if (xwl_screen->rootless && hint == CREATE_PIXMAP_USAGE_BACKING_PIXMAP) {
+                glamor_clear_pixmap(pixmap);
+            }
+
+	//}
     }
 
     if (!pixmap)
@@ -317,12 +376,17 @@ xwl_glamor_hybris_destroy_pixmap(PixmapPtr pixmap)
     if (xwl_pixmap && pixmap->refcnt == 1) {
         if (xwl_pixmap->buffer)
             wl_buffer_destroy(xwl_pixmap->buffer);
-	     hybris_gralloc_release(xwl_pixmap->handle, 1);
+	//if (xwl_pixmap->handle > 0)
+	//     hybris_gralloc_release(xwl_pixmap->handle, 1);
+	
+	eglDestroyImageKHR(xwl_screen->egl_display, xwl_pixmap->image);
+	 if (xwl_pixmap->buf)
+		glamor_egl->eglHybrisReleaseNativeBuffer(xwl_pixmap->buf);
         //eglDestroyImageKHR(xwl_screen->egl_display, pixmap_priv->image);
 	//pixmap_priv->image = NULL;
 	free(xwl_pixmap);
+	xwl_pixmap_set_private(pixmap, NULL);
     }
-
 
     return fbDestroyPixmap(pixmap);
     //return glamor_destroy_pixmap(pixmap);
@@ -338,7 +402,66 @@ xwl_glamor_hybris_get_wl_buffer_for_pixmap(PixmapPtr pixmap,
     //struct glamor_pixmap_private *pixmap_priv =
    //     glamor_get_pixmap_private(pixmap);
    // WaylandNativeWindowBuffer * wnb = pixmap_priv->wnb;
-    return  xwl_pixmap->buffer;
+    if (xwl_pixmap == NULL)
+       return NULL;
+
+    if (xwl_pixmap->buffer) {
+        /* Buffer already exists. Return it and inform caller if interested. */
+        if (created)
+            *created = FALSE;
+        return xwl_pixmap->buffer;
+    }
+
+    if (created)
+        *created = TRUE;
+
+    if (!xwl_pixmap->buf)
+       return NULL;
+   //struct egl_image * egl_image = xwl_pixmap->image;
+   //egl_image->target = EGL_WAYLAND_BUFFER_WL;
+   //xwl_pixmap->buffer = glamor_egl->eglCreateWaylandBufferFromImageWL(xwl_screen->egl_display, xwl_pixmap->image);
+
+    int numInts = 0;
+    int numFds = 0;
+
+    int * ints = NULL;
+    int * fds = NULL;
+
+    glamor_egl->eglHybrisGetNativeBufferInfo(xwl_pixmap->buf, &numInts, &numFds);
+
+    ints = malloc(numInts * sizeof(int));
+    fds = malloc(numFds * sizeof(int));
+
+    glamor_egl->eglHybrisSerializeNativeBuffer(xwl_pixmap->buf, ints, fds);
+
+    struct android_wlegl_handle *wlegl_handle;
+    struct wl_array wl_ints;
+    int *the_ints;
+
+    wl_array_init(&wl_ints);
+    the_ints = (int *)wl_array_add(&wl_ints, numInts * sizeof(int));
+    memcpy(the_ints, ints, numInts * sizeof(int));
+    wlegl_handle = android_wlegl_create_handle(glamor_egl->android_wlegl, numFds, &wl_ints);
+    wl_array_release(&wl_ints);
+
+    for (int i = 0; i < numFds; i++) {
+            android_wlegl_handle_add_fd(wlegl_handle, fds[i]);
+    }
+
+    int width =  pixmap->drawable.width;
+    int height =  pixmap->drawable.height;
+    //int stride = ((struct ANativeWindowBuffer *)(xwl_pixmap->buf))->stride ;
+    int stride = width * 4;
+    int m_format = 1;
+
+    struct wl_buffer * wlbuffer = android_wlegl_create_buffer((struct android_wlegl_handle *)glamor_egl->android_wlegl, width, height, stride, m_format, HYBRIS_USAGE_HW_RENDER, wlegl_handle);
+    android_wlegl_handle_destroy(wlegl_handle);
+
+    //wl_buffer_add_listener(wlbuffer, &buffer_listener, buffer);
+    //wl_buffer_add_listener(wlbuffer, &wl_buffer_listener, NULL);
+    xwl_pixmap->buffer = wlbuffer;
+
+    return xwl_pixmap->buffer;
 }
 
 /* Not actually used, just defined here so there's something for
@@ -358,6 +481,8 @@ xwl_glamor_hybris_init_wl_registry(struct xwl_screen *xwl_screen,
                                 uint32_t id, const char *name,
                                 uint32_t version)
 {
+
+   //struct glamor_egl_screen_private *glamor_egl = xwl_hybris_get(xwl_screen);
 
    if(strcmp(name, "android_wlegl") == 0) {
 	glamor_egl->android_wlegl = wl_registry_bind(wl_registry, id,
@@ -418,7 +543,8 @@ Bool hybris_init_hybris_native_buffer(struct xwl_screen *xwl_screen)
 
     glamor_egl->eglHybrisSerializeNativeBuffer = (PFNEGLHYBRISSERIALIZENATIVEBUFFERPROC) eglGetProcAddress("eglHybrisSerializeNativeBuffer");
     assert(glamor_egl->eglHybrisSerializeNativeBuffer != NULL);
-
+    glamor_egl->eglCreateWaylandBufferFromImageWL = (PFNEGLHYBRISCREATEWAYLANDBUFFERFROMIMAGEWLPROC) eglGetProcAddress("eglCreateWaylandBufferFromImageWL");
+    glamor_egl->eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC) eglGetProcAddress("eglCreateImageKHR");
     return TRUE;
 }
 
@@ -610,7 +736,7 @@ glamor_egl_set_pixmap_image(PixmapPtr pixmap, EGLImageKHR image,
     pixmap_priv->image = image;
     pixmap_priv->used_modifiers = used_modifiers;
 }
-#if 0
+
 Bool
 glamor_egl_create_textured_pixmap_from_egl_buffer(PixmapPtr pixmap,
                                               EGLClientBuffer buf)
@@ -633,9 +759,9 @@ glamor_egl_create_textured_pixmap_from_egl_buffer(PixmapPtr pixmap,
 
     glamor_make_current(glamor_priv);
 
-    image = eglCreateImageKHR(glamor_egl->display,
+    image = glamor_egl->eglCreateImageKHR(glamor_egl->display,
                               /* glamor_egl->context*/ EGL_NO_CONTEXT,
-                              EGL_NATIVE_BUFFER_HYBRIS, buf, NULL);
+                             EGL_NATIVE_BUFFER_HYBRIS, buf, NULL);
     if (image == EGL_NO_IMAGE_KHR) {
         glamor_set_pixmap_type(pixmap, GLAMOR_DRM_ONLY);
         goto done;
@@ -652,16 +778,16 @@ glamor_egl_create_textured_pixmap_from_egl_buffer(PixmapPtr pixmap,
  done:
     return ret;
 }
-#endif
+
 _X_EXPORT Bool
-glamor_back_pixmap_from_hybris_buffer(PixmapPtr pixmap,
+glamor_back_pixmap_from_hybris_buffer(ScreenPtr screen, PixmapPtr * pixmap,
                            CARD16 width,
                            CARD16 height,
                            CARD16 stride, CARD8 depth, CARD8 bpp,
                            int numInts, int *ints,
                            int numFds, int *fds)
 {
-    ScreenPtr screen = pixmap->drawable.pScreen;
+    //ScreenPtr screen = pixmap->drawable.pScreen;
     //ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
     //struct glamor_egl_screen_private *glamor_egl;
     Bool ret;
@@ -676,6 +802,17 @@ glamor_back_pixmap_from_hybris_buffer(PixmapPtr pixmap,
                                             HYBRIS_PIXEL_FORMAT_RGBA_8888, stride,
                                             numInts, ints, numFds, fds, &buf);
 
+    *pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth);
+    if (!*pixmap) {
+        ErrorF("%s  LINE: %d \n", __func__ , __LINE__);
+    }
+
+    //screen->ModifyPixmapHeader(pixmap, width, height, 0, 0, stride, NULL);
+
+    return true;
+
+
+#if 0
     struct android_wlegl_handle *wlegl_handle;
     struct wl_array wl_ints;
     int *the_ints;
@@ -711,9 +848,9 @@ glamor_back_pixmap_from_hybris_buffer(PixmapPtr pixmap,
     xwl_pixmap->remote_buffer = buf;
     //glamor_set_pixmap_type(pixmap, GLAMOR_DRM_ONLY);
     xwl_pixmap_set_private(pixmap, xwl_pixmap);
+#endif
 
-
-    screen->ModifyPixmapHeader(pixmap, width, height, 0, 0, stride, NULL);
+//    screen->ModifyPixmapHeader(pixmap, width, height, 0, 0, stride, NULL);
 
     //ret = glamor_egl_create_textured_pixmap_from_egl_buffer(pixmap, buf);
     return ret;
@@ -730,11 +867,12 @@ glamor_pixmap_from_hybris_buffer(ScreenPtr screen,
     PixmapPtr pixmap;
     Bool ret;
 
-    pixmap = screen->CreatePixmap(screen, 0, 0, depth, 0);
-    ret = glamor_back_pixmap_from_hybris_buffer(pixmap, width, height,
+    //pixmap = screen->CreatePixmap(screen, 0, 0, depth, 0);
+    ret = glamor_back_pixmap_from_hybris_buffer(screen, &pixmap, width, height,
                                      stride, depth, bpp,
                                      numInts, ints,
                                      numFds, fds);
+
     if (ret == FALSE) {
         screen->DestroyPixmap(pixmap);
         return NULL;
@@ -765,7 +903,7 @@ glamor_egl_exchange_buffers(PixmapPtr front, PixmapPtr back)
     glamor_set_pixmap_type(back, GLAMOR_TEXTURE_DRM);
 }
 
-#if 0
+
 static Bool
 glamor_hybris_make_pixmap_exportable(PixmapPtr pixmap)
 {
@@ -827,7 +965,7 @@ glamor_hybris_make_pixmap_exportable(PixmapPtr pixmap)
 
     return TRUE;
 }
-#endif 
+
 _X_EXPORT int
 glamor_hybris_buffer_from_pixmap(ScreenPtr screen,
                             PixmapPtr pixmap, CARD16 *stride,
@@ -844,12 +982,12 @@ glamor_hybris_buffer_from_pixmap(ScreenPtr screen,
     //unsigned int tex;
 
 
-    glamor_egl->eglHybrisGetNativeBufferInfo(xwl_pixmap->remote_buffer, numInts, numFds);
+    glamor_egl->eglHybrisGetNativeBufferInfo(xwl_pixmap->buffer, numInts, numFds);
 
     *ints = malloc(*numInts * sizeof(int));
     *fds = malloc(*numFds * sizeof(int));
 
-    glamor_egl->eglHybrisSerializeNativeBuffer(xwl_pixmap->remote_buffer, *ints, *fds);
+    glamor_egl->eglHybrisSerializeNativeBuffer(xwl_pixmap->buffer, *ints, *fds);
     return 0;
 
 //    switch (pixmap_priv->type) {
@@ -885,10 +1023,12 @@ static drihybris_screen_info_rec glamor_drihybris_info = {
 static Bool
 xwl_glamor_hybris_init_screen(struct xwl_screen *xwl_screen)
 {
-     hybris_gralloc_initialize(0);
+     //hybris_gralloc_initialize(0);
 //#ifdef DRIHYBRIS
 //    if (glamor_egl->drihybris_capable) {
         if (!drihybris_screen_init(xwl_screen->screen, &glamor_drihybris_info)) {
+           // xf86DrvMsg(scrn->scrnIndex, X_ERROR,
+           //             "Failed to initialize DRIHYBRIS.\n");
         }
 //    }
 //#endif
@@ -905,7 +1045,6 @@ xwl_glamor_init_hybris(struct xwl_screen *xwl_screen)
 
     xwl_screen->glamor_hybris_backend.is_available = FALSE;
     drihybris_extension_init();
-
     xwl_screen->glamor_hybris_backend.init_wl_registry = xwl_glamor_hybris_init_wl_registry;
     xwl_screen->glamor_hybris_backend.has_wl_interfaces = xwl_glamor_hybris_has_wl_interfaces;
     xwl_screen->glamor_hybris_backend.init_egl = xwl_glamor_hybris_init_egl;
