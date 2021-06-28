@@ -67,6 +67,8 @@ struct xwl_pixmap {
     struct gbm_bo *bo;
     buffer_handle_t handle;
     EGLClientBuffer remote_buffer;
+    int stride;
+    int format;
 };
 
 struct glamor_egl_screen_private {
@@ -89,12 +91,13 @@ struct glamor_egl_screen_private {
     PFNEGLHYBRISSERIALIZENATIVEBUFFERPROC eglHybrisSerializeNativeBuffer;
     PFNEGLHYBRISCREATEWAYLANDBUFFERFROMIMAGEWLPROC eglCreateWaylandBufferFromImageWL;
     PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
-
     CloseScreenProcPtr saved_close_screen;
     DestroyPixmapProcPtr saved_destroy_pixmap;
     //xf86FreeScreenProc *saved_free_screen;
     struct android_wlegl * android_wlegl;
+    //void * android_wlegl;
 };
+
 
 static struct glamor_egl_screen_private *glamor_egl = NULL;
 
@@ -152,7 +155,7 @@ is_device_path_render_node (const char *device_path)
 
 static PixmapPtr
 xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  EGLClientBuffer buf, int width, int height,
-                                    int depth)
+                                    int depth, int format, int stride)
 {
     PixmapPtr pixmap;
     struct xwl_pixmap *xwl_pixmap;
@@ -177,9 +180,11 @@ xwl_glamor_hybris_create_pixmap_for_native_buffer(ScreenPtr screen,  EGLClientBu
 
     xwl_pixmap->buf = buf;
     xwl_pixmap->buffer = NULL;
+    xwl_pixmap->stride = stride;
+    xwl_pixmap->format = format;
     //xwl_pixmap->buffer = wlb;
     //xwl_pixmap->handle = handle;
-    xwl_pixmap->image = glamor_egl->eglCreateImageKHR(xwl_screen->egl_display,
+    xwl_pixmap->image = eglCreateImageKHR(xwl_screen->egl_display,
                                           EGL_NO_CONTEXT,
                                           EGL_NATIVE_BUFFER_HYBRIS,
                                           xwl_pixmap->buf, NULL);
@@ -295,16 +300,22 @@ xwl_glamor_hybris_create_pixmap(ScreenPtr screen,
          hint == CREATE_PIXMAP_USAGE_SHARED)) {
 	int m_format = 1;
 	//int m_usage = GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
-	int m_usage = GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_RENDER;
+	//int m_usage = GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_RENDER;
+	int m_usage = GRALLOC_USAGE_HW_RENDER;
 	//int m_usage = 0xb00;
 	uint32_t stride = 0;
 	buffer_handle_t handle;
        // wnb = new ClientWaylandBuffer(width, height, m_format, m_usage);
 
+//       if (depth == 32)
+//	      m_format = HYBRIS_PIXEL_FORMAT_RGBA_8888;
+//       else if (depth == 24)
+//	      m_format = HYBRIS_PIXEL_FORMAT_RGB_888;
+
        EGLClientBuffer buf;
        glamor_egl->eglHybrisCreateNativeBuffer(width, height,
                                       m_usage,
-                                      HYBRIS_PIXEL_FORMAT_RGBA_8888,
+                                      m_format,
                                       &stride, &buf);
 #if 0
 	struct wl_array ints;
@@ -347,7 +358,7 @@ xwl_glamor_hybris_create_pixmap(ScreenPtr screen,
 	//wl_proxy_set_queue((struct wl_proxy *) wnb->wlbuffer, glamor_egl->wl_queue);
 #endif
 	//if (handle) {
-	    pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth);
+	    pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth, m_format, stride);
 	    if (!pixmap) {
 	    
 	    }
@@ -387,6 +398,7 @@ xwl_glamor_hybris_destroy_pixmap(PixmapPtr pixmap)
 	free(xwl_pixmap);
 	xwl_pixmap_set_private(pixmap, NULL);
     }
+
 
     return fbDestroyPixmap(pixmap);
     //return glamor_destroy_pixmap(pixmap);
@@ -451,8 +463,11 @@ xwl_glamor_hybris_get_wl_buffer_for_pixmap(PixmapPtr pixmap,
     int width =  pixmap->drawable.width;
     int height =  pixmap->drawable.height;
     //int stride = ((struct ANativeWindowBuffer *)(xwl_pixmap->buf))->stride ;
-    int stride = width * 4;
-    int m_format = 1;
+    //int stride = width * 4;
+    int stride = xwl_pixmap->stride;
+    //int m_format = 1;
+    int m_format = xwl_pixmap->format;
+
 
     struct wl_buffer * wlbuffer = android_wlegl_create_buffer((struct android_wlegl_handle *)glamor_egl->android_wlegl, width, height, stride, m_format, HYBRIS_USAGE_HW_RENDER, wlegl_handle);
     android_wlegl_handle_destroy(wlegl_handle);
@@ -617,29 +632,29 @@ xwl_glamor_hybris_init_egl(struct xwl_screen *xwl_screen)
     
     version = eglQueryString(xwl_screen->egl_display , EGL_VERSION);
 
-#define GLAMOR_CHECK_EGL_EXTENSION(EXT)  \
-        if (!epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT)) {  \
-                ErrorF("EGL_" #EXT " required.\n");  \
-/*              goto error; */ \
-        }
-
-#define GLAMOR_CHECK_EGL_EXTENSIONS(EXT1, EXT2)  \
-        if (!epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT1) &&  \
-            !epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT2)) {  \
-                ErrorF("EGL_" #EXT1 " or EGL_" #EXT2 " required.\n");  \
-                goto error;  \
-        }
-
-    GLAMOR_CHECK_EGL_EXTENSION(KHR_gl_renderbuffer_image);
-#ifdef GLAMOR_GLES2
-    GLAMOR_CHECK_EGL_EXTENSION(KHR_surfaceless_context);
-    GLAMOR_CHECK_EGL_EXTENSION(KHR_surfaceless_gles2);
-//    GLAMOR_CHECK_EGL_EXTENSIONS(KHR_surfaceless_context, KHR_surfaceless_gles2);
-#else
-    GLAMOR_CHECK_EGL_EXTENSIONS(KHR_surfaceless_context,
-                                KHR_surfaceless_opengl);
-#endif
-
+//#define GLAMOR_CHECK_EGL_EXTENSION(EXT)  \
+//        if (!epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT)) {  \
+//                ErrorF("EGL_" #EXT " required.\n");  \
+//              goto error;  \
+//        }
+//
+//#define GLAMOR_CHECK_EGL_EXTENSIONS(EXT1, EXT2)  \
+//        if (!epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT1) &&  \
+//            !epoxy_has_egl_extension(glamor_egl->display, "EGL_" #EXT2)) {  \
+//                ErrorF("EGL_" #EXT1 " or EGL_" #EXT2 " required.\n");  \
+//                goto error;  \
+//        }
+//
+//    GLAMOR_CHECK_EGL_EXTENSION(KHR_gl_renderbuffer_image);
+//#ifdef GLAMOR_GLES2
+//    GLAMOR_CHECK_EGL_EXTENSION(KHR_surfaceless_context);
+//    GLAMOR_CHECK_EGL_EXTENSION(KHR_surfaceless_gles2);
+////    GLAMOR_CHECK_EGL_EXTENSIONS(KHR_surfaceless_context, KHR_surfaceless_gles2);
+//#else
+//    GLAMOR_CHECK_EGL_EXTENSIONS(KHR_surfaceless_context,
+//                                KHR_surfaceless_opengl);
+//#endif
+//
 #ifndef GLAMOR_GLES2
     xwl_screen->egl_context = eglCreateContext(xwl_screen->egl_display,
                                            NULL, EGL_NO_CONTEXT,
@@ -664,6 +679,11 @@ xwl_glamor_hybris_init_egl(struct xwl_screen *xwl_screen)
         goto error;
     }
     //glamor_egl->surface = EGL_NO_SURFACE;
+
+    if (!epoxy_has_gl_extension("GL_OES_EGL_image")) {
+        ErrorF("GL_OES_EGL_image not available\n");
+        goto error;
+    }
 
     if (!eglMakeCurrent(xwl_screen->egl_display,
                         EGL_NO_SURFACE, EGL_NO_SURFACE, xwl_screen->egl_context)) {
@@ -797,14 +817,19 @@ glamor_back_pixmap_from_hybris_buffer(ScreenPtr screen, PixmapPtr * pixmap,
     if (bpp != 32 || !(depth == 24 || depth == 32) || width == 0 || height == 0)
         return FALSE;
 
+    int m_format = 1;
+//    if (depth == 32)
+//        m_format = HYBRIS_PIXEL_FORMAT_RGBA_8888;
+//    else if (depth = 24)
+//	m_format = HYBRIS_PIXEL_FORMAT_RGB_888;
+
     EGLClientBuffer buf;
     glamor_egl->eglHybrisCreateRemoteBuffer(width, height, HYBRIS_USAGE_HW_TEXTURE,
-                                            HYBRIS_PIXEL_FORMAT_RGBA_8888, stride,
+                                            m_format, stride,
                                             numInts, ints, numFds, fds, &buf);
 
-    *pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth);
+    *pixmap = xwl_glamor_hybris_create_pixmap_for_native_buffer(screen, buf,width, height, depth, m_format, stride);
     if (!*pixmap) {
-        ErrorF("%s  LINE: %d \n", __func__ , __LINE__);
     }
 
     //screen->ModifyPixmapHeader(pixmap, width, height, 0, 0, stride, NULL);
@@ -1045,6 +1070,7 @@ xwl_glamor_init_hybris(struct xwl_screen *xwl_screen)
 
     xwl_screen->glamor_hybris_backend.is_available = FALSE;
     drihybris_extension_init();
+
     xwl_screen->glamor_hybris_backend.init_wl_registry = xwl_glamor_hybris_init_wl_registry;
     xwl_screen->glamor_hybris_backend.has_wl_interfaces = xwl_glamor_hybris_has_wl_interfaces;
     xwl_screen->glamor_hybris_backend.init_egl = xwl_glamor_hybris_init_egl;
