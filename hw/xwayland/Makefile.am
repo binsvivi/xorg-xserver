@@ -62,7 +62,8 @@ hybris_built_sources = wayland-android-protocol.c \
 Xwayland_built_sources += $(glamor_built_sources)
 Xwayland_built_sources += $(hybris_built_sources)
 
-drihybris_lib = /usr/local/lib/xorg/modules/libdrihybris.la
+#drihybris_lib = /usr/local/lib/xorg/modules/libdrihybris.la
+drihybris_lib = /usr/lib/aarch64-linux-gnu/xorg/modules/libdrihybris.la
 glamor_lib = $(top_builddir)/glamor/libglamor.la
 #glamor_lib = /usr/lib/xorg/modules/libglamoreglhybris.la
 hybris_lib = /opt/libhybris/lib/aarch64-linux-gnu/
