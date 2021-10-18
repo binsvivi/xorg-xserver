@@ -402,8 +402,8 @@ xwl_glamor_hybris_destroy_pixmap(PixmapPtr pixmap)
     }
 
 
-    return fbDestroyPixmap(pixmap);
-    //return glamor_destroy_pixmap(pixmap);
+    //return fbDestroyPixmap(pixmap);
+    return glamor_destroy_pixmap(pixmap);
 
 }
 
