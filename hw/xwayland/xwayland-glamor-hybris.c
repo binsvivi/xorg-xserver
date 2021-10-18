@@ -298,7 +298,8 @@ xwl_glamor_hybris_create_pixmap(ScreenPtr screen,
         (hint == 0 ||
          hint == CREATE_PIXMAP_USAGE_BACKING_PIXMAP ||
          hint == CREATE_PIXMAP_USAGE_SHARED)) {
-	int m_format = 1;
+	//int m_format = 1;
+	int m_format =  HYBRIS_PIXEL_FORMAT_BGRA_8888;
 	//int m_usage = GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_TEXTURE;
 	//int m_usage = GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_RENDER;
 	int m_usage = GRALLOC_USAGE_HW_RENDER;
@@ -314,7 +315,8 @@ xwl_glamor_hybris_create_pixmap(ScreenPtr screen,
 
        EGLClientBuffer buf;
        glamor_egl->eglHybrisCreateNativeBuffer(width, height,
-                                      m_usage,
+                                      //m_usage,
+				      HYBRIS_USAGE_HW_TEXTURE|HYBRIS_USAGE_SW_READ_OFTEN|HYBRIS_USAGE_SW_WRITE_OFTEN,
                                       m_format,
                                       &stride, &buf);
 #if 0
